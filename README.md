@@ -7,6 +7,29 @@
 原项目是「给 DSH 装一条有日子的鱼」：自己按作息醒来，刷 B 站、真看懂视频、写两本日记，
 把值得的 @ 你。这一版改动不改变她的核心人格和日常流程，只是把**相处**的部分做得更像回事。
 
+> **所有设计、架构、绝大部分代码都来自原作者 [Alterssss](https://github.com/Alterssss)。**
+> 这个仓库只是我在自己使用过程中改的一版，不是官方版本，与原作者无隶属关系。
+
+---
+
+## 我改了什么（一览）
+
+| # | 改动 | 类型 | 涉及文件 |
+|---|---|---|---|
+| 1 | **私信多条消息** —— 一行一条，逐条发，像真人打字 | 新增 | `lib/multi-msg.js` |
+| 2 | **主动发消息** —— 补上"聊完补话""久未联系"两个时机 | 新增 | `lib/proactive.js` |
+| 3 | **醒来发 B 站动态** —— 正常醒来按 30% 概率 | 新增 | `lib/dynamic-post.js` |
+| 4 | **分享评论下的回复询问** —— 有人在她 @ 你的评论下说话，私信问你回不回 | 新增 | `lib/share-reply-watch.js` |
+| 5 | **人格设定去规则腔** —— 去掉会让她跳出角色念声明的写法 | 调整 | `~/.bili-ai/persona.md`（用户数据，不分发） |
+| 6 | **修 `buvid3` 强校验 bug** —— 动态发不出去的真因 | 修复 | `tools/commands/dynamic.mjs` |
+| 7 | **日记推送改走文件** —— 不再和聊天抢私信写额度 | 修复 | 配置 `notify.type` |
+| 8 | **回复提速** —— 轮询 60→15 秒，冷却 60→2 秒 | 调参 | `tools/lib/poll-policy.mjs`、配置 |
+| 9 | **设置页新增 5 个字段** + 保存白名单 + 范围校验 | 配套 | `lib/client.js`、`lib/index.js` |
+
+**总计**：新增 4 个文件、修改 5 个文件、1 处配置调整。
+
+下面逐条展开。
+
 ---
 
 ## 这一版多了什么
@@ -205,21 +228,93 @@ dsh plugin --profile desktop add "link:C:\path\to\this-repo"
 **新增（4 个）**
 
 ```
-lib/multi-msg.js            多条短消息
-lib/proactive.js            三种时机的主动发消息
-lib/share-reply-watch.js    分享评论下的回复识别
-lib/dynamic-post.js         醒来发动态
+lib/multi-msg.js            多条短消息：按行解析、逐条发、停顿 1-3 秒
+lib/proactive.js            三种时机的主动发消息 + 作息窗口判断
+lib/share-reply-watch.js    分享评论下的回复识别 + 询问文案生成
+lib/dynamic-post.js         醒来发动态的掷骰与授权文案
 ```
 
 **修改（5 个）**
 
 ```
-lib/scheduler.js              三个新功能的接入点
+lib/scheduler.js              三个新功能的接入点（约 +460 行）
 lib/index.js                  保存白名单 + 范围校验
-lib/client.js                 设置页字段
-tools/commands/dynamic.mjs    buvid3 修复
+lib/client.js                 设置页 5 个字段
+tools/commands/dynamic.mjs    buvid3 不再强校验
 tools/lib/poll-policy.mjs     轮询下限 15s → 5s
 ```
+
+**配置调整（`~/.dsh/bili-whale.config.json`）**
+
+```json
+{
+  "proactiveChance": 0.2,
+  "proactiveDailyMax": 3,
+  "dynamicChance": 0.3,
+  "dynamicDailyMax": 1,
+  "notify": { "type": "file" },
+  "listen": { "dmIntervalSec": 15, "shareReplyAsk": true },
+  "risk": {
+    "dmGapSec": 2,
+    "writeHourly": 80,
+    "writeDaily": 200,
+    "readHourly": 900,
+    "readDaily": 8000
+  },
+  "night": { "maxVideos": 2, "skipChance": 0.25 },
+  "quota": { "shareDaily": 1 },
+  "sessionRotateDays": 3,
+  "personaOncePerSession": true
+}
+```
+
+> 完整配置里还有 `owner` / `persona` / `preferences` 等个人字段，按自己的情况填，
+> 详见原项目 README。
+
+---
+
+## 实现要点（给想看代码的人）
+
+**多条消息怎么拆**
+
+`parseOutgoing()` 按换行切分，逐条清洗：
+
+- 空行丢弃
+- `---` / `***` 等 markdown 分隔线当分段符
+- 包裹引号自动去掉（`「…」` / `"…"`）
+- `（不回）` / `(不回)` / `不回` → 返回空数组，一条都不发
+- CRLF 兼容
+- 超过 `HARD_CAP`（6 条）截断，保留靠前的
+
+发送时每条之间 `gapMs(i)` 停顿 1–3 秒（第一条不等）。
+
+**为什么走"写文件 + 插件代发"**
+
+她那个会话的权限是 `ask`，自己跑 `bili.mjs dm --go` 会弹审批框。
+审批没人点 → 那一轮永久挂起 → 之后所有消息排队 → 看起来像"发私信没反应"。
+
+所以改成：她只把内容写进工作区内的文件（`workspace-write` 免审批），
+插件进程读取后代发。插件本身有完整权限，且仍在请求保护层之下。
+
+**主动发消息的三个时机**
+
+- 生物钟醒来：`tick()` 里掷，只在 `normalWake` 时（跳过"今晚不看""网络暂停"）
+- 聊完补话：她回完消息后 `scheduleFollowup()` 延迟 30–90 秒再掷
+- 久未联系：`startIdleWatch()` 每 10 分钟检查，超过 3 小时没聊才掷
+
+三者共用 `PROACTIVE_LEDGER` 日账本，且都要过 `inWindow()` 作息判断
+（支持跨午夜窗口）。
+
+**分享评论怎么识别**
+
+B 站 `x/msgfeed/reply` 的 `root_id` 指向被回复的根评论。
+把她历史分享评论的 `rpid` 收集成集合，用它匹配新回复的 `root_id` 即可精确命中。
+
+来源两条：`quota.json` 的 `log`（`comment.mjs` 记账时带 `rpid`），
+或自维护的 `whale-shares.json`（兜底）。
+
+命中后坐标存进 `whale-share-reply-pending.json`，
+主人回"回"之后注入她那轮提示。
 
 ---
 
@@ -227,7 +322,10 @@ tools/lib/poll-policy.mjs     轮询下限 15s → 5s
 
 - 原项目的测试套件**没跑通**：本地环境沙箱拦截 `spawn`（EPERM），
   `node --test` 起不了子进程。所以这一版**没有回归测试**。
-- 新模块的逻辑、概率、窗口判断都单独验证过，但没跑完整测试套件。
+- 新模块的逻辑、概率、窗口判断都单独验证过（概率统计 1–2 万次、
+  作息窗口 13 个时间点含跨午夜、分享回复 4 种情况），但没跑完整测试套件。
+- `multi-msg` 的 6 条上限、`proactive` 的日上限都是按个人使用习惯定的，
+  不是通用最优值。
 
 ---
 
@@ -235,5 +333,13 @@ tools/lib/poll-policy.mjs     轮询下限 15s → 5s
 
 原项目 MIT，见 [LICENSE](LICENSE)。这一版沿用同一许可。
 
-一切设计都来自原作者 [Alterssss](https://github.com/Alterssss)，
-这个仓库只是个人使用过程中改的一版，与 B 站、DeepSeek 官方无隶属关系。
+**所有设计、架构与绝大部分代码来自原作者 [Alterssss](https://github.com/Alterssss)。**
+
+这个仓库只是个人使用过程中改的一版：
+
+- 不是官方版本，与原作者无隶属关系
+- 未经原作者审核
+- 包含若干降低风控保守度的参数调整，**不建议照搬到新账号**
+
+如果你想用原版，请去 [Alterssss/dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale)。
+与 B 站、DeepSeek 官方均无隶属关系。

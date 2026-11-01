@@ -33,6 +33,8 @@ const FILES = [
   [path.join(DSH, 'bili-whale.config.json'), 'dsh/bili-whale.config.json'],
   [path.join(DSH, 'whale-diary.md'), 'dsh/whale-diary.md'],
   [path.join(DSH, 'whale-diary-private.md'), 'dsh/whale-diary-private.md'],
+  // 2026-11-01 主人定的分工：规则/改动/设置值单独一本 ✓ 也得跟着备份
+  [path.join(DSH, 'whale-rules.md'), 'dsh/whale-rules.md'],
   // 账本（可选）
   [path.join(DSH, 'whale-proactive.json'), 'dsh/whale-proactive.json'],
   [path.join(DSH, 'whale-share-plan.json'), 'dsh/whale-share-plan.json'],

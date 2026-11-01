@@ -34,7 +34,11 @@
     "LISTENER-FIX.md",
     "DM-HISTORY-FIX.md",
     "BUGFIX-2026-10-25.md",
-    "QR-LOGIN-2026-10-25.md"
+    "QR-LOGIN-2026-10-25.md",
+    "FIXES-2026-11-01.md",
+    "FORK-NOTES.md",
+    "FUNCTIONAL-GUIDE.md",
+    "persona.example.md"
   ],
   "dsh": {
     "bundle": {

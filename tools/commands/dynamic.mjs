@@ -27,10 +27,10 @@ const dynId = args.get('id')
 const credPath = path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json')
 if (!fs.existsSync(credPath)) { console.error(`缺少凭据文件: ${credPath}`); process.exit(3) }
 const cred = JSON.parse(fs.readFileSync(credPath, 'utf8'))
-// 2026-10-30 修：buvid3 不再强求 ✗
-//   实测本机的 buvid3 是空串，而私信 / 评论那几条路径只发 SESSDATA + bili_jct 就能成功 ✓
-//   这里却硬性要求 buvid3 → 动态根本发不出去（和别的通道不一致 ✗）
-//   保留 sessdata / bili_jct 的校验（这两个缺了确实发不出去 ✓）
+// buvid3 is not required for these writes: msgfeed.mjs and dm.mjs send only
+// SESSDATA + bili_jct, and comments / DMs work fine without it. Demanding it
+// here made dynamic posting fail on accounts with an empty buvid3, while
+// reporting the misleading "missing credentials" error.
 for (const k of ['sessdata', 'bili_jct']) {
   if (!cred[k] || String(cred[k]).trim() === '') { console.error(`凭据文件缺少 ${k}`); process.exit(3) }
 }
@@ -41,7 +41,7 @@ const REF = 'https://t.bilibili.com/'
 
 const MIXIN_TAB = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52]
 const keyOf = (u) => u.slice(u.lastIndexOf('/') + 1, u.lastIndexOf('.'))
-async function wbi(params) {
+async function wbi(params, tsKey = 'wts') {
   const d = await (await fetch('https://api.bilibili.com/x/web-interface/nav', {
     headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: cookieHeader },
   })).json()
@@ -50,8 +50,9 @@ async function wbi(params) {
   const mixin = MIXIN_TAB.map((i) => (keyOf(img) + keyOf(sub))[i]).join('').slice(0, 32)
   const wts = Math.round(Date.now() / 1000)
   const clean = (v) => String(v).replace(/[!'()*]/g, '')
-  const q = Object.keys({ ...params, wts }).sort()
-    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(clean(k === 'wts' ? wts : params[k]))}`).join('&')
+  const all = { ...params, [tsKey]: wts }
+  const q = Object.keys(all).sort()
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(clean(all[k]))}`).join('&')
   return `${q}&w_rid=${crypto.createHash('md5').update(q + mixin).digest('hex')}`
 }
 
@@ -97,7 +98,11 @@ if (mode === 'post') {
       meta: { app_meta: { from: 'create.dynamic.web', mobi_app: 'web' } },
     },
   })
-  const qs = await wbi({})
+  // 2026-10-31 修（主人报「发动态一直 CSRF 校验失败」）：
+  //   动态发布接口的 WBI 参数名是 **t**，不是通用的 **wts** ✗
+  //   以前传 wts → 签名和服务端算的对不上 → 永远 code=-111 ✗
+  //   实测：改成 t 之后 code=0 发布成功 ✓
+  const qs = await wbi({ csrf: String(cred.bili_jct) }, 't')
   const url = `https://api.bilibili.com/x/dynamic/feed/create/dyn?${qs}`
   console.log('\n=== 将要发布 ===')
   console.log(`  POST ${url.replace(encodeURIComponent(String(cred.bili_jct)), '***csrf***').slice(0, 120)}…`)

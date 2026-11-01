@@ -73,7 +73,7 @@ async function realText(x) {
   if (cache.has(key)) return cache.get(key)
   resolved += 1
   const r = await resolveLatestReply({ business: x.business, oid: x.oid, root: x.root, mid: x.mid, parentRpid: x.parent, headers: H }).catch(() => null)
-  const out = { text: (r?.text ?? '').replace(/\n/g, ' '), rpid: r?.rpid || x.parent, ctime: r?.ctime }
+  const out = { text: (r?.text ?? '').replace(/\n/g, ' '), rpid: r?.rpid || x.parent, ctime: r?.ctime, rootRpid: r?.rootRpid }
   cache.set(key, out)
   return out
 }
@@ -93,7 +93,13 @@ for (const x of all) {
   say(`· ${hhmm(real.ctime || x.t)} [${tag}] ${x.who}`)
   say(`    「${text}」`)
   if (x.uri) say(`    位置：${x.uri}`)
+  // 2026-10-31 修：@ 类通知也要给坐标（主人报「我 @ 她没反应」）
+  //   root_id 常常是 0，真正的楼是 source_id 指向的那条 → 回在他的评论下面 = root=parent=rpid ✓
   if (x.kind === 'reply') say(`    坐标：type=${x.business} oid=${x.oid} root=${x.root} parent=${real?.rpid || x.parent}`)
+  else {
+    const rr = real?.rootRpid || '0'
+    say(`    坐标：type=${x.business} oid=${x.oid} root=${real?.rpid || x.root || x.parent} parent=${real?.rpid || x.parent}${rr === '0' ? '（root_id=0，已回查真实楼层）' : ''}`)
+  }
 }
 
 if (JSON_OUT) {

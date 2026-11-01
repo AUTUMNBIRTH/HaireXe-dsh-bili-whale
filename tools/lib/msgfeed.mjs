@@ -75,6 +75,26 @@ export async function resolveLatestReply({ business, oid, root, mid, parentRpid,
     reps.push(...page)
     if (page.length < 20) break
   }
+  // 2026-10-31 修（主人报「我 @ 她没反应」）：
+  //   @ 类通知的 root_id 常常是 0，只有 source_id（被 @ 的那条评论）✓
+  //   这时 thread = source_id 本身 → 楼里只有那一条根，取不到"被 @ 的正文"✗
+  //   补一路：root 是 0 时改用「按 rpid 直接查评论详情」，拿到真正的正文和坐标 ✓
+  if ((!root || String(root) === '0') && parentRpid) {
+    const d = await exactJson(await fetch(
+      `https://api.bilibili.com/x/v2/reply/detail?type=${type}&oid=${oid}&root=${parentRpid}&ps=1`,
+      { headers })).catch(() => null)
+    if (d && d.code === 0 && d.data?.root) {
+      const r0 = d.data.root
+      return {
+        rpid: String(r0.rpid ?? parentRpid),
+        text: String(r0.content?.message ?? ''),
+        ctime: Number(r0.ctime ?? 0),
+        exact: true,
+        rootRpid: String(r0.rpid ?? parentRpid),
+        rootParent: String(r0.parent ?? ''),
+      }
+    }
+  }
   const mine = reps.filter((r) => String(r.mid) === String(mid))
   if (!mine.length) return null
   let pick = null

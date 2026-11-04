@@ -61,6 +61,43 @@ function isLoopbackReq(req) {
  * 值本身不回显 —— 只告诉设置页「这里有没有填过」✓
  */
 const SECRET_NAME_RE = /(cookie|token|pass(word|wd)?|secret|sessdata|bili_jct|buvid|api[_-]?key|access[_-]?key)/i
+/** 脱敏时用的占位符 —— 保存时必须能认出它 */
+export const MASK = '******'
+
+/**
+ * 把 incoming 里「还是掩码」的敏感字段剔掉，保留磁盘上原来的值。
+ *
+ * ⚠️ 2026-11-04 晚（主人截图：「NapCat WebUI 认证失败（code=-1）：token 对不对？」）：
+ *   这是**真丢密码**的 bug。流程是：
+ *     ① GET /config 把 webui.token 脱敏成 ****** 发到浏览器
+ *     ② 用户在设置页改了**别的**字段，点保存
+ *     ③ 前端把整个 config（含 ******）POST 回来
+ *     ④ 服务端直接写文件 → **磁盘上的真密码被 ****** 覆盖了** ✗
+ *   之后再扫码，就拿着 ****** 去认证，必然失败。
+ *
+ *   现在：保存前先把值为 MASK 的敏感字段挖掉，用磁盘上原来的值补上。
+ *   想真的改密码，就填一个不是 MASK 的新值 ✓
+ */
+export function stripMaskedSecrets(incoming, current) {
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return incoming
+  const out = {}
+  for (const [k, v] of Object.entries(incoming)) {
+    const isSecret = SECRET_NAME_RE.test(k)
+    // 掩码值 = 用户没动这个字段 → 用磁盘上的原值
+    if (isSecret && v === MASK) {
+      if (current && Object.prototype.hasOwnProperty.call(current, k)) out[k] = current[k]
+      continue
+    }
+    // 嵌套对象继续往下挖（但不要挖太深，配置没那么深）
+    if (v && typeof v === 'object' && !Array.isArray(v) && current && typeof current[k] === 'object') {
+      out[k] = stripMaskedSecrets(v, current[k])
+      continue
+    }
+    out[k] = v
+  }
+  return out
+}
+
 export function redact(entry, value, depth = 0) {
   if (depth > 8) return '…'
   if (Array.isArray(value)) return value.map((v) => redact(entry, v, depth + 1))
@@ -68,7 +105,7 @@ export function redact(entry, value, depth = 0) {
     const out = {}
     for (const [k, v] of Object.entries(value)) {
       if (SECRET_NAME_RE.test(k) && (typeof v === 'string' || typeof v === 'number') && String(v).length > 0) {
-        out[k] = '******'
+        out[k] = MASK
       } else {
         out[k] = redact(entry, v, depth + 1)
       }
@@ -454,7 +491,13 @@ function applyCore(ctx, DSH_HOME, log) {
         //   连 QQ 号都填不进去 —— 必须先开再填，顺序全反了 ✗
         //   「怕它还在动」这个担心不成立：关着就是关着，改配置不会让它跑起来 ✓
         const body = JSON.parse((await readBody(req)) || '{}')
-        const incoming = (body && typeof body.config === 'object' && body.config) || body || {}
+        const incomingRaw = (body && typeof body.config === 'object' && body.config) || body || {}
+        // ⚠️ 2026-11-04 晚：**先剔掉掩码** —— 不然前端把 ``******`` 原样回传，
+        //   磁盘上的真密码就被覆盖了（实测把 webui.token 写成了 ******，
+        //   导致扫码一直「认证失败 code=-1」）✗
+        let current = {}
+        try { current = store.readChannel(id) ?? {} } catch { current = {} }
+        const incoming = stripMaskedSecrets(incomingRaw, current)
         // ⚠️ 2026-11-04：写之前先把"习惯"那几项存进共享文件 —— 另一个入口立刻看到 ✓
         saveSharedHabits(incoming, id)
         const next = store.writeChannel(id, incoming)

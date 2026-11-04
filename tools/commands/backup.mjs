@@ -53,7 +53,27 @@ for (let i = 0; i < argv.length; i += 1) {
 const DRY = !!opt.dry
 const GO = !!opt.go
 const FROM = opt.from ? path.resolve(String(opt.from)) : null
-const TO = opt.to ? path.resolve(String(opt.to)) : path.join(HOME, 'Desktop', '邦邦的备份')
+
+/**
+ * 默认目录 = 桌面「<人格名字>的备份」
+ * ⚠️ 2026-11-04 晚（主人：「不需要『邦邦的备份』，直接是他创建那个人格名字的备份就行」）
+ */
+function defaultBackupDir() {
+  let name = ''
+  try {
+    const hf = path.join(DSH, 'whale-habits.json')
+    if (fs.existsSync(hf)) name = String(JSON.parse(fs.readFileSync(hf, 'utf8'))?.persona?.name ?? '')
+  } catch { /* 往下退 */ }
+  if (!name.trim()) {
+    try {
+      name = String(JSON.parse(fs.readFileSync(path.join(DSH, 'bili-whale.config.json'), 'utf8'))?.persona?.name ?? '')
+    } catch { /* 还没有 */ }
+  }
+  const safe = name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim()
+  return path.join(HOME, 'Desktop', safe ? `${safe}的备份` : '她的备份')
+}
+
+const TO = opt.to ? path.resolve(String(opt.to)) : defaultBackupDir()
 
 function ensureDir(d) { if (!DRY) fs.mkdirSync(d, { recursive: true }) }
 

@@ -1,7 +1,31 @@
-﻿# 肥鱼硬邦邦 · dsh-bili-whale 个人修改版
+# 肥鱼硬邦邦 · dsh-bili-whale 个人修改版
 
 > 基于 [Alterssss/dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale) 0.4.6 的个人修改版
 > —— 在她原本「按作息自己看视频、写日记、@ 你」的基础上，补上了**聊天、主动、记忆**三件事。
+
+> ### 🆕 2026-11-04 更新
+>
+> 接上了**总控制台**（[dsh-whale-core](https://github.com/HaireXe-d/dsh-whale-core)），
+> 并把本机跑了很久、仓库里还没收的修复全部补上：
+> **私信额度独立**、**失败退避 15→3 分钟**、**评论被吞不记账**、**残留回复补发**、
+> **会话按自然日轮换**、**忙时也能换**。
+>
+> 逐条说明（「原来怎样 / 现在怎样 / 为什么」）：**[UPDATE-2026-11-04.md](UPDATE-2026-11-04.md)**
+>
+> **功能一个都没减少** —— 没装 core 也能独立运行（已实测 12/12）。
+
+## 安装
+
+```bash
+git clone https://github.com/HaireXe-d/HaireXe-dsh-bili-whale
+cd HaireXe-dsh-bili-whale
+node install.mjs
+```
+
+装完**完整退出 DSH 再启动**。
+
+> 想用「养鱼」总控制台（统一管理 B站 / QQ 两个入口、分配私聊和动态走哪边），
+> 再装一下 [dsh-whale-core](https://github.com/HaireXe-d/dsh-whale-core)。**不装也能用。**
 
 原项目是「给 DSH 装一条有日子的鱼」：自己按作息醒来，刷 B 站、真看懂视频、写两本日记，
 把值得的 @ 你。这一版没有改她的核心人格和日常流程，改的是**相处**的部分。

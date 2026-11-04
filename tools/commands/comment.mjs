@@ -339,6 +339,30 @@ console.log(`  code=${out.code} message=${out.message ?? ''}`)
 if (out.code === 0) {
   const rpid = out.data?.rpid_str ?? out.data?.rpid
   console.log(`  ✅ 已发布，评论 rpid=${rpid}`)
+
+  // 2026-11-02 加（主人：「修复一下试试」）：
+  //   病根：B 站会给「内容被吞」的评论照样回 code=0 + rpid，
+  //   以前这里直接记账（分享额度照扣），实际上评论区里根本没有这条 ✗
+  //   实测 11-01~11-02 一共吞了四条（322596145216 / 322582928752 / 318843091185 / 322668355296）
+  //   现在：拿到 rpid 后**当场回读一次**（reply/detail 按 root 查），
+  //     · 查得到 → 正常记账 ✓
+  //     · 查不到 → 明确告诉你「可能被吞了」，并且**不记账**（额度留给下一次）
+  //   回读本身失败（网络/风控）不当成吞评论 —— 那种情况照旧记账，只提示人工复核 ✓
+  let verify = 'skipped'
+  if (rpid) {
+    try {
+      const vr = await fetch(`https://api.bilibili.com/x/v2/reply/detail?type=${type}&oid=${oid}&root=${rpid}`,
+        { headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: cookieHeader } })
+      const vb = await exactJson(vr)
+      if (vb.code === 0 && (vb.data?.root?.rpid || vb.data?.root?.rpid_str)) verify = 'ok'
+      else if (vb.code === 12006 || vb.code === 12089) verify = 'gone'   // 明确不存在 / 不属于该评论区
+      else verify = 'unknown'                                            // 其它错误：不敢下结论
+    } catch { verify = 'unknown' }
+    if (verify === 'ok') console.log('  [回读] ✓ 评论区里查得到')
+    else if (verify === 'gone') console.log('  [回读] ✗ 查不到这条评论 —— 接口回了成功，但评论不在评论区里（可能被吞）')
+    else console.log('  [回读] ? 回读失败，无法确认；按已发出处理，请事后人工复核')
+  }
+
   // once-per-person：记一笔"回过谁"，下次判重用
   // 2026-10-22：主人不进 replied.json —— 否则回他一条就把他锁 30 天 ✗
   const __ownerMid = String(config().owner?.mid ?? '')
@@ -364,9 +388,15 @@ if (out.code === 0) {
     } catch (e) { console.log(`  [once] 记账失败（不影响已发出的评论）：${String(e.message).slice(0, 80)}`) }
   }
   // 记账（发出去才算数）
-  const rec = quota(['record', '--type', 'comment', '--target', bvid ? `BV:${bvid}` : `oid:${oid}`,
-    '--note', message.replace(/\s+/g, ' ').slice(0, 40), ...(SHARE ? ['--share'] : AUTO ? ['--auto'] : [])])
-  console.log(`  [限额闸] ${rec.out}`)
+  // 2026-11-02：回读确认「查不到」→ 不记账（额度不白扣）
+  if (verify === 'gone') {
+    console.log('  [限额闸] 判定被吞 → 本次不记账，额度留到下一次 ✓')
+    console.log('  ⚠️ 这条不算推成功：别说「已发布」，也别说「已复核」')
+  } else {
+    const rec = quota(['record', '--type', 'comment', '--target', bvid ? `BV:${bvid}` : `oid:${oid}`,
+      '--note', message.replace(/\s+/g, ' ').slice(0, 40), ...(SHARE ? ['--share'] : AUTO ? ['--auto'] : [])])
+    console.log(`  [限额闸] ${rec.out}`)
+  }
   // 自主 / 分享型 → **自动报备**（把 AGENTS 里的"约定"落到代码里；后端由 config.notify 决定）
   if (AUTO || SHARE) {
     try {

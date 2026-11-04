@@ -36,18 +36,46 @@ test('failed delivery retries persona; concurrent channels inject only once; edi
 })
 test('rotation waits for idle, preserves old session and restores persona/diary',async t=>{
   const f=fixture(t,{sessionRotateDays:1,personaOncePerSession:true}),d=f.make()
-  await d.send(f.request);f.advance(86400001);f.busy(true);await d.send(f.request)
-  assert.equal(f.sent.at(-1).sessionId,'bili-whale')
-  f.busy(false);f.advance(8*60000);await d.send(f.request)
+  // ⚠️ 2026-11-04 更新（配合 lib/session-delivery.js 的新轮换规则）：
+  //   旧逻辑：忙（isBusy）就不切 —— 实测 11-03 两趟醒来都撞上她在干活，一整天没切 ✗
+  //   新逻辑：超期 + **没有待确认投递** + 距上次投递满 8 分钟 → 就切（忙不忙不再作为条件）
+  //   所以这条测试改成守「有待确认投递时**不许**切」这个新保护点 ✓
+  const req1={...f.request,requestId:'r1'}
+  await d.send(req1,undefined,{retainUntilAck:true})   // 留下 pendingRequest → 不轮换
+  f.advance(86400001)                                   // 超期了
+  const req2={...f.request,requestId:'r2'}
+  await d.send(req2,undefined,{retainUntilAck:true})
+  assert.equal(f.sent.at(-1).sessionId,'bili-whale', '还有待确认投递时不该切')
+  // 待确认清掉（模拟已确认）后，再满足 8 分钟空闲 → 才切
+  const stateFile=path.join(f.dir,'whale-session.json')
+  const st=JSON.parse(fs.readFileSync(stateFile))
+  delete st.pendingRequest
+  fs.writeFileSync(stateFile,JSON.stringify(st))
+  const d2=f.make()                                     // 重新建一个 delivery（读回没有 pending 的状态）
+  f.advance(8*60000)
+  await d2.send(f.request)
   const r=f.sent.at(-1);assert.match(r.sessionId,/^[0-9a-f-]{36}$/);assert.match(r.content[0].text,/PERSONA-A/);assert.match(r.content[0].text,/whale-diary-private.md/)
-  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'whale-session.json'))).rotatedFrom,'bili-whale')
+  assert.equal(JSON.parse(fs.readFileSync(stateFile)).rotatedFrom,'bili-whale')
   await f.make().send(f.request);assert.equal(f.sent.at(-1).sessionId,r.sessionId)
 })
-test('restart respects delivery cooldown even when rotation becomes due',async t=>{
+test('restart rotates once when due, and re-injects persona instead of silently reusing memory',async t=>{
   const cfg={sessionRotateDays:0,personaOncePerSession:true},f=fixture(t,cfg)
-  await f.make().send(f.request);f.advance(86400001);await f.make().send(f.request)
-  cfg.sessionRotateDays=1;await f.make().send(f.request)
-  assert.equal(f.sent.at(-1).sessionId,'bili-whale')
+  await f.make().send(f.request)                        // 首次投递，会话=bili-whale
+  f.advance(86400001)                                   // 过了一天
+  cfg.sessionRotateDays=1                               // 现在算超期
+  // ⚠️ 2026-11-04 更新：新规则下 booted=false 时**跳过 8 分钟空闲检查**（第 46 行），
+  //   所以重启后第一次投递如果已经超期，会**直接轮换**一次 —— 这是有意的：
+  //   重启时她刚醒，换一个新会话正好配合「重新注入人设 + 日记指引」防止失忆 ✓
+  //   旧断言（重启后当次不切）已经不成立，改成守真正要保证的两件事：
+  await f.make().send(f.request)
+  const r=f.sent.at(-1)
+  assert.match(r.sessionId,/^[0-9a-f-]{36}$/, '超期后重启，应当轮换到新会话')
+  assert.notEqual(r.sessionId,'bili-whale')
+  // ① 切换后必须重新注入人设，不能静默复用记忆
+  assert.match(r.content[0].text,/PERSONA-A/, '轮换后必须重新注入人设')
+  assert.match(r.content[0].text,/whale-diary-private\.md/, '轮换后必须给日记恢复指引')
+  // ② 旧会话要保留（不删），下次还能找回来
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'whale-session.json'))).rotatedFrom,'bili-whale')
 })
 test('rotation creation failure does not commit a new session; aborted queue does not send',async t=>{
   const f=fixture(t,{sessionRotateDays:1}),d=f.make();await d.send(f.request);f.advance(86400001);f.createFail(true)

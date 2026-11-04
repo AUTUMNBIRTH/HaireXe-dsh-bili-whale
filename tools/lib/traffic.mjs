@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { configPath } from './paths.mjs'
 
-export const RISK_DEFAULTS = { minGapMs: 1500, readHourly: 600, readDaily: 3000, writeHourly: 12, writeDaily: 30, writeGapSec: 120, dmGapSec: 60 }
+export const RISK_DEFAULTS = { minGapMs: 1500, readHourly: 600, readDaily: 3000, writeHourly: 12, writeDaily: 30, writeGapSec: 120, dmGapSec: 60, dmReadHourly: 900, dmReadDaily: 30000 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 export function riskSettings() {
   let cfg = {}
@@ -97,6 +97,13 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
     const body = options.body ?? (writing && input instanceof Request ? await input.clone().text() : undefined)
     const operation = writing ? await fingerprint(url, body) : null
     const id = operation ? account.slice(0,16) + ':' + operation : null
+    // 2026-11-02 修（主人：「怎么每次醒来之后就收不到私聊消息」）：
+    //   私信轮询（fetch_session_msgs）每 5 秒一次 ≈ 720 次/小时、一天 10000+ 次，
+    //   会把 readDaily 吃光 → 之后所有读请求（包括私信轮询自己）全被拒
+    //   → 醒来后跑一趟 feed/debrief，当天额度见底 → 私信彻底哑掉 ✗
+    //   现在私信轮询单独记账（dmReadHourly / dmReadDaily），不再挤占普通读取预算 ✓
+    //   节奏保护照旧：minGapMs 仍在，dmIntervalSec 也还在 ✓
+    const dmPoll = !writing && url.pathname.includes('/svr_sync/') && url.pathname.includes('fetch_session_msgs')
     const cfg = settings()
     let timestamp = now()
     const waitDeadline=timestamp+Math.min(180000,Math.max(0,Number(options.waitWriteMs)||0))
@@ -109,20 +116,35 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
       s.accounts ??= {}; s.operations ??= {}
       const a = s.accounts[account] ??= {}
       const date = new Date(timestamp).toLocaleDateString('sv-SE')
-      if (a.date !== date) Object.assign(a, { date, readDay: 0, writeDay: 0 })
-      if (!a.hourAt || timestamp - a.hourAt >= 3600000) Object.assign(a, { hourAt: timestamp, readHour: 0, writeHour: 0 })
+      if (a.date !== date) Object.assign(a, { date, readDay: 0, writeDay: 0, dmReadDay: 0 })
+      if (!a.hourAt || timestamp - a.hourAt >= 3600000) Object.assign(a, { hourAt: timestamp, readHour: 0, writeHour: 0, dmReadHour: 0 })
       for (const [key, item] of Object.entries(s.operations)) if (item.status !== 'unknown' && item.status !== 'pending' && timestamp - item.at > 86400000) delete s.operations[key]
       if (writing) {
-        if (s.operations[id]) throw new TrafficError(`相同操作已提交或结果待核查，禁止重复发送；操作 ID：${id}`)
+        // 2026-11-03 修（主人：「咦，怎么没有收到消息」）：
+        //   聊天里同一句话本来就会重复说 ——「嗯」「mua」「晚安」一天说好几次 ✓
+        //   以前只要 24 小时内有**同指纹**的写操作就一律拦 ✗
+        //   （指纹 = 账号+接口+正文，跟时间无关）→ 第二条 mua 永远发不出去 ✗
+        //   现在只在两种情况下拦：① 上一次结果没确认（防双发）② 10 分钟内重复太快 ✓
+        const prev = s.operations[id]
+        if (prev) {
+          const age = timestamp - Number(prev.at ?? 0)
+          const unresolved = prev.status === 'pending' || prev.status === 'unknown'
+          if (unresolved || age < 10 * 60_000) {
+            throw new TrafficError(`相同操作已提交或结果待核查，禁止重复发送；操作 ID：${id}`)
+          }
+        }
         if (Object.keys(s.operations).length >= 2000) throw new TrafficError('发送记录已满，请先核查未确认操作')
         const gap = (url.pathname.endsWith('/send_msg') ? cfg.dmGapSec : cfg.writeGapSec) * 1000
         if (a.lastWrite && timestamp - a.lastWrite < gap && !url.pathname.endsWith('/reply/del')) throw Object.assign(new TrafficError('写操作冷却中，请稍后再发送'), { cooldownMs: a.lastWrite + gap - timestamp })
         if ((a.writeHour ?? 0) >= cfg.writeHourly || (a.writeDay ?? 0) >= cfg.writeDaily) throw new TrafficError('已达到本地写操作预算，本次不发送')
+      } else if (dmPoll) {
+        if ((a.dmReadHour ?? 0) >= cfg.dmReadHourly || (a.dmReadDay ?? 0) >= cfg.dmReadDaily) throw new TrafficError('私信轮询额度已满，稍后自动恢复（不影响其他读取）')
       } else if ((a.readHour ?? 0) >= cfg.readHourly || (a.readDay ?? 0) >= cfg.readDaily) throw new TrafficError('已达到本地读取预算，请等待预算窗口恢复')
       const slot = Math.max(timestamp, Number(s.nextAt ?? 0))
       if (slot - timestamp > 30000) throw new TrafficError('请求队列已满，本次停止')
       s.nextAt = slot + cfg.minGapMs
       if (writing) { a.writeHour=(a.writeHour??0)+1; a.writeDay=(a.writeDay??0)+1; a.lastWrite=timestamp; s.operations[id]={at:timestamp,status:'pending',endpoint:url.pathname} }
+      else if (dmPoll) { a.dmReadHour=(a.dmReadHour??0)+1; a.dmReadDay=(a.dmReadDay??0)+1 }
       else { a.readHour=(a.readHour??0)+1; a.readDay=(a.readDay??0)+1 }
       return { slot }
     })

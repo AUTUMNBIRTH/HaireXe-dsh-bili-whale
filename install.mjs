@@ -32,26 +32,20 @@ if (!fs.existsSync(PROFILE_DIR)) {
   die(`找不到 DSH profile：${PROFILE_DIR}\n      先启动一次 DeepSeek Harness，它会自己建好`)
 }
 
-// ── 1. 检查共用框架 whale-core ───────────────────────────────────
-const hasCore = fs.existsSync(path.join(PROFILE_DIR, 'node_modules', 'dsh-whale-core'))
-  || fs.existsSync(path.join(DSH, 'whale-core'))
-if (!hasCore) {
-  say('  [!] 没找到 dsh-whale-core（两个鱼共用的框架）')
-  say('')
-  say('      它是总控制台和通道管理的基础，必须一起装。先执行：')
-  say('')
-  say('        git clone https://github.com/<你的账号>/dsh-whale-core')
-  say('        cd dsh-whale-core')
-  say('        node install.mjs')
-  say('')
-  say('      装完再回来跑本脚本。')
-  say('')
+// ── 1. 自带共用框架 ─────────────────────────────────────────────
+// ⚠️ 2026-11-04 晚：主人说「dsh-whale-core 这个库不要，那两个库里分别放一个就行」。
+//   所以 core 现在**就在本仓库的 core/ 目录里**，跟着插件一起装，不用再单独装一遍 ✓
+//   （以前这里会检查外面有没有 core，没有就让你先去装 —— 那个仓库已经不要了）
+const bundledCore = path.join(HERE, 'core')
+if (!fs.existsSync(path.join(bundledCore, 'lib', 'index.js'))) {
+  say('  [X] 本仓库缺 core/ 目录（共用框架应该在 repo 里自带）')
+  say('      可能是解压/克隆不完整，重新 clone 一次这个仓库再来。')
   process.exit(1)
 }
-say('  [1/3] 找到 dsh-whale-core  ✓')
+say('  [1/3] 自带共用框架 core/ ✓')
 
 // ── 2. 决定装到哪儿 ──────────────────────────────────────────────
-// 通道插件放 ~/.dsh/plugins/<包名>；core 放 ~/.dsh/whale-core（历史位置，保持不变）
+// 通道插件放 ~/.dsh/plugins/<包名>（core/ 作为子目录一起过去）
 const target = path.join(PLUGIN_DIR, PKG)
 fs.mkdirSync(path.dirname(target), { recursive: true })
 const samePath = path.resolve(target).toLowerCase() === path.resolve(HERE).toLowerCase()

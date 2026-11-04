@@ -1,0 +1,21 @@
+{
+  "name": "dsh-whale-core",
+  "version": "0.1.0",
+  "description": "养鱼通道框架（内嵌版）：跟着宿主插件一起发布，不作为独立插件加载。",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./registry": "./lib/registry.js",
+    "./config": "./lib/channel-config.js",
+    "./shared": "./lib/shared.js",
+    "./habits": "./lib/habits.js",
+    "./body": "./lib/body.js",
+    "./features": "./lib/features.js",
+    "./risk": "./lib/risk.mjs",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT"
+}

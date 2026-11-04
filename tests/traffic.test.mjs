@@ -84,9 +84,17 @@ test('corrupt protection state refuses network instead of resetting budgets',asy
  const s=setup(t);fs.writeFileSync(path.join(s.directory,'traffic-state.json'),'{broken')
  await assert.rejects(s.guard.fetch('https://api.bilibili.com/x/one'),/损坏/);assert.equal(s.calls(),0)
 })
-test('failed polling backs off to fifteen minutes and resets after success',()=>{
+// ⚠️ 2026-11-04：退避上限从 15 分钟(900000) 改成了 3 分钟(180000) ——
+//   主人要求「失败退避 900→180s」（原来 15 分钟太久，一次失败就错过好几轮消息）。
+//   这条测试当时没跟着改，一直红着。现在对齐实现 ✓
+//
+//   算法是 min(max(base, 180), base * 2^rounds)，所以：
+//     · base=60  → 封顶 180（Math.max(60,180)=180）
+//     · base=300 → 结果是 300（base 本身就超过 180，Math.max(300,180)=300）✓ 别想当然
+test('failed polling backs off to three minutes and resets after success',()=>{
  assert.equal(pollDelay(60,0),60000);assert.equal(pollDelay(60,1),120000)
- assert.equal(pollDelay(60,20),900000);assert.equal(pollDelay(300,2),900000)
+ assert.equal(pollDelay(60,20),180000)          // 基础 60s 的封顶
+ assert.equal(pollDelay(300,2),300000)          // 基础本身就 300s，封顶不往下压
  assert.equal(pollDelay(60,0),60000)
 })
 test('independent Node processes share actual request spacing',async t=>{

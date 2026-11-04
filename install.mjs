@@ -69,20 +69,53 @@ if (!samePath) {
   say('  [2/3] 本来就在目标位置，跳过复制')
 }
 
-// ── 3. 装运行时依赖（B站 需要 qrcode）─────────────────────────
-const deps = Object.keys(JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).dependencies ?? {})
-const needInstall = deps.some((d) => !fs.existsSync(path.join(target, 'node_modules', d, 'package.json')))
-if (needInstall) {
-  say('  [2.5] 装依赖：' + deps.join(', ') + ' ...')
-  try {
-    execFileSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: target, stdio: 'inherit' })
-    say('        依赖装好了 ✓')
-  } catch {
-    say('        [!] npm install 失败。手动执行：cd "' + target + '" && npm install')
+// ── 3. 装运行时依赖并**验证**（2026-11-04 加固）────────────────
+//
+// ⚠️ 原来这里是「npm install 失败就打个警告继续」—— 结果装完插件 import 失败，
+//   表现成「设置页少了那一节 / 接口 404」，最难查 ✗
+//   现在：装不上就 exit(1)，绝不给你一个半成品。
+const pkgDeps = Object.keys(JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).dependencies ?? {})
+const missingDeps = pkgDeps.filter((d) => !fs.existsSync(path.join(target, 'node_modules', d, 'package.json')))
+if (missingDeps.length) {
+  say('  [2.5] 装依赖：' + missingDeps.join(', ') + ' ...')
+  const runners = [
+    { cmd: 'npm', args: ['install', '--omit=dev', '--no-audit', '--no-fund'] },
+    { cmd: 'pnpm', args: ['install', '--prod'] },
+    { cmd: 'corepack', args: ['npm', 'install', '--omit=dev'] },
+  ]
+  let ok = false
+  let tried = []
+  for (const r of runners) {
+    try {
+      execFileSync(r.cmd, r.args, { cwd: target, stdio: 'inherit', shell: true })
+      ok = true
+      break
+    } catch (e) { tried.push(r.cmd) }
   }
-} else {
-  say('  [2.5] 依赖已就位 ✓')
+  if (!ok) {
+    console.error('')
+    console.error('  [X] 没有可用的包管理器（试过：' + tried.join(' / ') + '）')
+    console.error('      这个插件必须有 ' + missingDeps.join(', ') + ' 才能加载，装不上就会表现为')
+    console.error('      「设置页少了这一节」或者「接口 404」。')
+    console.error('')
+    console.error('      手动修（装完再重跑本脚本也行）：')
+    console.error('        cd "' + target + '"')
+    console.error('        npm install')
+    console.error('')
+    process.exit(1)
+  }
 }
+
+// ⚠️ 硬校验：不只是"命令跑完了"，而是**真的能解析到**
+const stillMissing = pkgDeps.filter((d) => !fs.existsSync(path.join(target, 'node_modules', d, 'package.json')))
+if (stillMissing.length) {
+  console.error('')
+  console.error('  [X] 依赖装了但找不到：' + stillMissing.join(', '))
+  console.error('      手动修：cd "' + target + '" && npm install')
+  console.error('')
+  process.exit(1)
+}
+say('  [2.5] 依赖就位并已验证 ✓')
 
 // ── 4. 登记到 profile + 建链接 ───────────────────────────────────
 const pkgFile = path.join(PROFILE_DIR, 'package.json')

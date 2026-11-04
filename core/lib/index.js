@@ -496,7 +496,10 @@ function applyCore(ctx, DSH_HOME, log) {
         //   所以：**登录/账号这一族 POST 例外放行**（前缀 auth/ 与 accounts/）。
         //   其余 POST 仍然要通道开着 ✓
         const isRead = method === 'GET'
-        const isSetup = /^(auth|accounts)\//.test(want)
+        // ⚠️ 2026-11-04（第三次）：备份/恢复也被 409 挡死了。
+        //   备份是**读磁盘**、恢复是**写文件** —— 都跟通道开没开完全无关，
+        //   关着的通道照样该能备份（甚至更该，因为要停着才能安全恢复）✗
+        const isSetup = /^(auth|accounts|backup)\//.test(want)
         if (!store.isEnabled(id) && !isRead && !isSetup) {
           json(res, 409, { ok: false, error: `通道 ${id} 现在是关的：先在上面把它打开，再操作「${want}」` }); return
         }

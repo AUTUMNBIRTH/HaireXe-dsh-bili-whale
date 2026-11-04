@@ -166,7 +166,22 @@ export function saveHabits({ dshHome, patch = {}, who = '' } = {}) {
  */
 export function ensureHabits({ dshHome, biliCfg = {}, qqCfg = {}, now = Date.now() } = {}) {
   const existing = readJsonSafe(habitsFile(dshHome))
-  if (existing) return { migrated: false, source: 'existing', habits: normalizeHabits(existing) }
+
+  // ⚠️ 2026-11-04 晚（主人：「爱好没和哔站同步」）：
+  //   原来这里 `if (existing) return` —— 文件存在就直接不管了。
+  //   结果：首次迁移时 B站 的 preferences 是空的（那时还没填），
+  //         后来 B站 填了爱好，共享文件却一直空着，QQ 永远读不到 ✗
+  //
+  //   现在：文件存在也要**补漏** —— 哪个字段在共享文件里是空的，
+  //         就从通道配置里捞回来。已经有的不覆盖（避免把 QQ 改的值冲掉）。
+  if (existing) {
+    const patched = backfillHabits({ existing, biliCfg, qqCfg })
+    if (patched.changed) {
+      writeJsonSafe(habitsFile(dshHome), { ...existing, ...patched.patch, _backfilledAt: now })
+      return { migrated: false, source: 'backfill', habits: normalizeHabits({ ...existing, ...patched.patch }) }
+    }
+    return { migrated: false, source: 'existing', habits: normalizeHabits(existing) }
+  }
 
   const biliH = pickHabits(biliCfg)
   const qqH = pickHabits(qqCfg)
@@ -183,17 +198,54 @@ export function ensureHabits({ dshHome, biliCfg = {}, qqCfg = {}, now = Date.now
   const source = biliMoved ? 'bili' : qqMoved ? 'qq' : 'defaults'
   const seed = source === 'bili' ? biliH : source === 'qq' ? qqH : {}
 
-  const merged = mergeDeep(structuredClone(HABIT_DEFAULTS), {
-    ...seed,
-    // QQ 那边 proactive 是对象、B 站是散字段，这里把 QQ 的也算上
-    ...(source === 'qq' ? {} : {}),
-  })
+  const merged = mergeDeep(structuredClone(HABIT_DEFAULTS), seed)
   writeJsonSafe(habitsFile(dshHome), {
     ...merged,
     _migratedAt: now,
     _migratedFrom: source,
   })
   return { migrated: true, source, habits: normalizeHabits(merged) }
+}
+
+/**
+ * 补漏：共享文件里空着的字段，从通道配置里捞回来（已有的不覆盖）。
+ *
+ * 为什么需要：首次迁移之后用户还会继续填设置，但共享文件不会自己更新。
+ * 不做这个，就会出现「B站 有爱好、QQ 永远读不到」这种情况 ✗
+ *
+ * @returns {{ changed: boolean, patch: object }}
+ */
+export function backfillHabits({ existing = {}, biliCfg = {}, qqCfg = {} } = {}) {
+  const cur = normalizeHabits(existing)
+  const patch = {}
+  const has = (v) => (Array.isArray(v) ? v.length > 0 : v !== undefined && v !== null && String(v).trim() !== '')
+
+  // ① 口味：共享层空着，就按 B站 → QQ 的顺序捞
+  const prefs = {}
+  for (const key of ['like', 'dislike', 'keywords']) {
+    if (has(cur.preferences?.[key])) continue
+    const fromBili = biliCfg?.preferences?.[key]
+    const fromQq = qqCfg?.preferences?.[key]
+    const picked = has(fromBili) ? fromBili : (has(fromQq) ? fromQq : null)
+    if (picked !== null) {
+      // 字符串拆成数组（B 站历史配置里可能是字符串）
+      prefs[key] = Array.isArray(picked) ? picked : String(picked).split(/[,，、\s]+/).filter(Boolean)
+    }
+  }
+  if (Object.keys(prefs).length) patch.preferences = { ...cur.preferences, ...prefs }
+
+  // ② 人设的名字/称呼/自称：共享层空着就捞
+  const persona = {}
+  for (const key of ['name', 'ownerTitle', 'selfClaim']) {
+    if (has(cur.persona?.[key])) continue
+    const fromBili = biliCfg?.persona?.[key]
+    const fromQq = qqCfg?.persona?.[key]
+    const picked = has(fromBili) ? fromBili : (has(fromQq) ? fromQq : null)
+    if (picked !== null) persona[key] = picked
+  }
+  if (Object.keys(persona).length) patch.persona = { ...cur.persona, ...persona }
+
+  return { changed: Object.keys(patch).length > 0, patch }
 }
 
 /**
@@ -204,10 +256,27 @@ export function ensureHabits({ dshHome, biliCfg = {}, qqCfg = {}, now = Date.now
 export function applyHabits({ cfg = {}, habits }) {
   const out = { ...cfg }
   const h = habits ?? normalizeHabits({})
-  // 作息 / 主动 / 口味 / 人设：直接换成共享的
+  // 作息 / 主动：直接换成共享的（这两个默认值本身就有内容，不会出现"被空值冲掉"）
   out.night = h.night
   out.proactive = h.proactive
-  out.preferences = h.preferences
+
+  // ⚠️ 2026-11-04 晚修（主人：「爱好没和哔站同步」）：
+  //   原来这里是 `out.preferences = h.preferences` —— **无条件覆盖**。
+  //   而 whale-habits.json 里的 preferences 是空的（首次迁移时没搬过来），
+  //   结果 B站 自己填好的爱好被共享层的空值冲掉了 ✗
+  //   实测：文件里是 ["同步测试","鱼"]，applyHabits 之后变成 []。
+  //
+  //   现在：共享层有货 → 用共享的（这样"改一边另一边跟着变"成立）；
+  //         共享层是空的 → 保留这个通道自己那份（不丢数据）。
+  const hp = h.preferences ?? {}
+  const ownP = cfg.preferences ?? {}
+  const has = (v) => (Array.isArray(v) ? v.length > 0 : Boolean(String(v ?? '').trim()))
+  out.preferences = {
+    like: has(hp.like) ? hp.like : (ownP.like ?? []),
+    dislike: has(hp.dislike) ? hp.dislike : (ownP.dislike ?? []),
+    keywords: has(hp.keywords) ? hp.keywords : (ownP.keywords ?? []),
+  }
+
   // 人设：习惯里**非空**的才覆盖，空的留通道自己的
   //   ⚠️ 不能直接用 h.persona 覆盖 —— 共享文件里 name 是空的，
   //     会把 B 站已经填好的"邦邦"冲成空字符串 ✗

@@ -256,9 +256,29 @@ export function backfillHabits({ existing = {}, biliCfg = {}, qqCfg = {} } = {})
 export function applyHabits({ cfg = {}, habits }) {
   const out = { ...cfg }
   const h = habits ?? normalizeHabits({})
-  // 作息 / 主动：直接换成共享的（这两个默认值本身就有内容，不会出现"被空值冲掉"）
-  out.night = h.night
-  out.proactive = h.proactive
+  // ⚠️ 2026-11-07 晚修（对比主人真实配置时发现的）：
+  //   原来这里是**无条件覆盖**：
+  //       out.night = h.night
+  //       out.proactive = h.proactive
+  //   问题：共享层只要有值，用户在 QQ 控制台上改的作息/主动概率
+  //   **每次读都被顶回去** —— 改不动，也看不出为什么 ✗
+  //
+  //   实测：主人 QQ 配置里作息是 9:00-11:00，共享层是 8:00-12:00
+  //        → 他在界面上改了也白改。
+  //
+  //   现在和口味一样：共享层**有内容**才覆盖，空的保留各自的 ✓
+  //   「改一边另一边跟着变」照样成立 —— 只要共享层真的写了值
+  const hn = h.night ?? {}
+  const ownNight = cfg.night ?? {}
+  out.night = (Array.isArray(hn.windows) && hn.windows.length)
+    ? { ...ownNight, ...hn }
+    : { ...ownNight }
+
+  const hpro = h.proactive ?? {}
+  const ownPro = cfg.proactive ?? {}
+  out.proactive = (hpro && Object.keys(hpro).length)
+    ? { ...ownPro, ...hpro }
+    : { ...ownPro }
 
   // ⚠️ 2026-11-04 晚修（主人：「爱好没和哔站同步」）：
   //   原来这里是 `out.preferences = h.preferences` —— **无条件覆盖**。

@@ -1,10 +1,13 @@
-# 肥鱼硬邦邦 · dsh-bili-whale 个人修改版
+# dsh-bili-whale · 过日子版
 
-> 基于 [Alterssss/dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale) 0.4.6 的个人修改版
-> —— 在她原本「按作息自己看视频、写日记、@ 你」的基础上，补上了**聊天、主动、记忆**三件事。
+> 基于 [HaireXe-d/HaireXe-dsh-bili-whale](https://github.com/HaireXe-d/HaireXe-dsh-bili-whale) 0.4.6
+> （再往上溯到原作者 [Alterssss](https://github.com/Alterssss)）的一个实用修改版。
+>
+> 不是给"跑得更好"做的，是给"一直过下去"做的。
 
 原项目是「给 DSH 装一条有日子的鱼」：自己按作息醒来，刷 B 站、真看懂视频、写两本日记，
-把值得的 @ 你。这一版没有改她的核心人格和日常流程，改的是**相处**的部分。
+把值得的 @ 你。这一版没有改她的核心人格和日常流程，改的是**相处时真正会卡住的那几处**。
+
 
 > **所有设计、架构和绝大部分代码都来自原作者 [Alterssss](https://github.com/Alterssss)。**
 > 这个仓库只是个人使用中改的一版，不是官方版本，与原作者无隶属关系。

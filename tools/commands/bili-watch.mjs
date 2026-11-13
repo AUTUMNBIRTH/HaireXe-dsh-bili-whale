@@ -37,26 +37,45 @@ console.log(`UP: ${owner}   时长: ${duration}s   cid=${cid}`)
 
 // 画质实测（2026-10-14）：html5 + qn=32 会被压到 360p（返回 quality=16，界面小字全糊）；
 // 改 platform=pc + qn=80 可拿到 720p（返回 quality=64），依旧是普通 mp4 直链，不必碰 dash。
-const p = await apiGet(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnval=1&platform=pc&high_quality=1`, H)
-const url = p.data?.durl?.[0]?.url
-if (!url) { console.error(`没拿到直链（code=${p.code} ${p.message ?? ""}）——有些视频要登录或只有 dash 流`); process.exit(4) }
+// 2026-11-12 改：画质自动降档。
+//   原来固定 qn=80（720p）。一条 15 分钟的 720p 直链就是 300MB+，
+//   下载稍有抖动就整段失败 → 那一轮抽帧全废（实测 914 秒的 VR 视频就栽在这里）。
+//   现在：720p 下不动就自动换 480p / 360p 重试。九宫格最后会被压到 900px 左右，480P 完全够用 ✓
 const QN = { 16: '360P', 32: '480P', 64: '720P', 80: '1080P' }
-console.log(`实际画质: ${QN[p.data.quality] ?? p.data.quality}`)
+const QN_TRIES = process.argv.includes('--low') ? [32, 16] : [80, 64, 32, 16]
 
 fs.mkdirSync(outDir, { recursive: true })
 const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 const mp4 = path.join(outDir, `${bvid}-${stamp}.mp4`)
 const sheet = path.join(outDir, `${bvid}-${stamp}-${cols}x${rows}.jpg`)
 
-const r = await fetch(url, { headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', range: 'bytes=0-' } })
-if (!r.ok) { console.error(`下载失败 HTTP ${r.status}`); process.exit(5) }
-// 2026-10-21 修（外部审计 #6）：原来是 Buffer.from(await r.arrayBuffer()) ——
-//   一条两小时 720p 视频就是 1–2GB 内存峰值 ✗ 改成流式写盘，内存占用恒定 ✓
-if (!r.body) { console.error('下载失败：响应没有 body'); process.exit(5) }
 const { pipeline } = await import('node:stream/promises')
 const { Readable } = await import('node:stream')
-await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(mp4))
-console.log(`已下载: ${mp4}  (${(fs.statSync(mp4).size / 1024 / 1024).toFixed(2)} MB)`)
+let watchedQuality = null
+for (const qn of QN_TRIES) {
+  const p = await apiGet(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=${qn}&fnval=1&platform=pc&high_quality=1`, H)
+  const url = p.data?.durl?.[0]?.url
+  if (!url) { console.error(`qn=${qn} 没拿到直链（code=${p.code} ${p.message ?? ''}）`); continue }
+  const label = QN[p.data.quality] ?? p.data.quality
+  console.log(`尝试画质: ${label}（qn=${qn}）`)
+  try {
+    const r = await fetch(url, {
+      headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', range: 'bytes=0-' },
+      signal: AbortSignal.timeout(240_000),
+    })
+    if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`)
+    await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(mp4))
+    const size = fs.statSync(mp4).size
+    if (size < 64 * 1024) throw new Error(`只有 ${size} 字节，不像完整文件`)
+    console.log(`已下载: ${mp4}  (${(size / 1024 / 1024).toFixed(2)} MB)`)
+    watchedQuality = label
+    break
+  } catch (e) {
+    console.error(`下载失败（${label}）：${e.message} —— 换低一档重试`)
+    try { fs.rmSync(mp4, { force: true }) } catch {}
+  }
+}
+if (!watchedQuality) { console.error('所有画质都下载失败（网络不稳或该视频限制）'); process.exit(5) }
 
 // ── 取帧方式：优先"画面变化点"，不够再退回等间隔（2026-10-14 参考 K3 的做法）
 // 画面变化由 ffmpeg 的 scene 过滤器给出：空跑一次，把 pts_time 抓出来，再从中均匀挑 N 个。

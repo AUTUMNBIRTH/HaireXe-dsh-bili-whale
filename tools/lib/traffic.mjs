@@ -111,7 +111,11 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
       const date = new Date(timestamp).toLocaleDateString('sv-SE')
       if (a.date !== date) Object.assign(a, { date, readDay: 0, writeDay: 0 })
       if (!a.hourAt || timestamp - a.hourAt >= 3600000) Object.assign(a, { hourAt: timestamp, readHour: 0, writeHour: 0 })
-      for (const [key, item] of Object.entries(s.operations)) if (item.status !== 'unknown' && item.status !== 'pending' && timestamp - item.at > 86400000) delete s.operations[key]
+      // 2026-11-11：去重窗口 10 分钟 → 90 秒。
+      //   10 分钟还是会挡住聊天里的重复短句：她隔几分钟再说一次「嗯」就被当成重复发送拦下 ✗
+      //   （实测 13:56 那句「嗯」被她十分钟前说过的同样一个字挡住，整条消息没发出去）
+      //   90 秒只挡「网络重试/双击」这种真正的重复，正常聊天不受影响 ✓
+      for (const [key, item] of Object.entries(s.operations)) if (item.status !== 'unknown' && item.status !== 'pending' && timestamp - item.at > 90000) delete s.operations[key]
       if (writing) {
         if (s.operations[id]) throw new TrafficError(`相同操作已提交或结果待核查，禁止重复发送；操作 ID：${id}`)
         if (Object.keys(s.operations).length >= 2000) throw new TrafficError('发送记录已满，请先核查未确认操作')
